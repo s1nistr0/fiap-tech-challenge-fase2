@@ -5,6 +5,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -105,8 +107,26 @@ func main() {
 	mux.HandleFunc("/health", app.healthHandler)
 	mux.HandleFunc("/evaluate", app.evaluationHandler)
 
-	log.Printf("Serviço de Avaliação (Go) rodando na porta %s", port)
-	if err := http.ListenAndServe(":"+port, mux); err != nil {
-		log.Fatal(err)
+	srv := &http.Server{Addr: ":" + port, Handler: mux}
+
+	go func() {
+		log.Printf("Serviço de Avaliação (Go) rodando na porta %s", port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}()
+
+	// esse aqui e o que mais escala, entao e o que mais morre quando a carga cai.
+	// drenar direito importa mais nele do que em qualquer outro.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
+	<-stop
+
+	log.Println("SIGTERM recebido, drenando conexoes em andamento...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("nao deu tempo de drenar tudo: %v", err)
 	}
+	log.Println("encerrado sem derrubar ninguem")
 }
