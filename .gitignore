@@ -3,9 +3,10 @@
 !.env.example
 .DS_Store
 
-# instrucoes minhas pro fluxo de trabalho, nao faz parte da entrega
+# anotacoes minhas de estudo/roteiro, nao faz parte da entrega
 CLAUDE.md
 ANOTACOES-AULAS.md
+DESAFIOS-ENCONTRADOS.md
 .claude/
 
 # binarios do go build local

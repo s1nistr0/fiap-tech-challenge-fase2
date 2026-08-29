@@ -2,3 +2,5 @@ Flask==2.2.2
 gunicorn==20.1.0
 python-dotenv==0.21.0
 boto3==1.26.50
+# flask 2.2.2 quebra com werkzeug 3.x (url_quote sumiu). pinar e obrigatorio.
+Werkzeug==2.2.3

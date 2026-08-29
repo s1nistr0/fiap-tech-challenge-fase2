@@ -22,6 +22,10 @@ AWS_REGION = os.getenv("AWS_REGION")
 SQS_QUEUE_URL = os.getenv("AWS_SQS_URL")
 DYNAMODB_TABLE_NAME = os.getenv("AWS_DYNAMODB_TABLE")
 
+# o dynamodb local nao atende no endpoint publico da aws, tem que apontar na mao.
+# rodando no EKS essa var fica vazia e o boto3 resolve o endpoint sozinho.
+DYNAMODB_ENDPOINT = os.getenv("AWS_DYNAMODB_ENDPOINT") or None
+
 if not all([AWS_REGION, SQS_QUEUE_URL, DYNAMODB_TABLE_NAME]):
     log.critical("Erro: AWS_REGION, AWS_SQS_URL, e AWS_DYNAMODB_TABLE devem ser definidos.")
     sys.exit(1)
@@ -31,7 +35,7 @@ if not all([AWS_REGION, SQS_QUEUE_URL, DYNAMODB_TABLE_NAME]):
 try:
     session = boto3.Session(region_name=AWS_REGION)
     sqs_client = session.client("sqs")
-    dynamodb_client = session.client("dynamodb")
+    dynamodb_client = session.client("dynamodb", endpoint_url=DYNAMODB_ENDPOINT)
     log.info(f"Clientes Boto3 inicializados na região {AWS_REGION}")
 except NoCredentialsError:
     log.critical("Credenciais da AWS não encontradas. Verifique seu ambiente.")

@@ -1,0 +1,6 @@
+.git
+README.md
+db/
+Dockerfile
+.env
+__pycache__/
