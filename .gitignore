@@ -1,0 +1,17 @@
+.env
+*.env
+!.env.example
+.DS_Store
+
+# instrucoes minhas pro fluxo de trabalho, nao faz parte da entrega
+CLAUDE.md
+ANOTACOES-AULAS.md
+.claude/
+
+# binarios do go build local
+auth-service/auth-service
+evaluation-service/evaluation-service
+
+__pycache__/
+*.pyc
+venv/
