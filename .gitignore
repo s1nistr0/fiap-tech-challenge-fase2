@@ -16,3 +16,6 @@ evaluation-service/evaluation-service
 __pycache__/
 *.pyc
 venv/
+
+# roteiro do dia 2, so meu
+DIA2-RUNBOOK.md
