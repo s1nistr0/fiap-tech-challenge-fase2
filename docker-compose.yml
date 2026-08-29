@@ -1,0 +1,165 @@
+services:
+  postgres-auth:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: auth_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./auth-service/db/init.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./local/postgres-auth/02-dev-key.sql:/docker-entrypoint-initdb.d/02-dev-key.sql:ro
+      - pgdata-auth:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d auth_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  postgres-apps:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./local/postgres-apps/01-init.sh:/docker-entrypoint-initdb.d/01-init.sh:ro
+      - ./flag-service/db/init.sql:/seed/flags.sql:ro
+      - ./targeting-service/db/init.sql:/seed/targeting.sql:ro
+      - pgdata-apps:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres && psql -U postgres -d targeting_db -c 'select 1'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    # sharedDb pra tabela ser a mesma independente da access key usada
+    command: ["-jar", "DynamoDBLocal.jar", "-inMemory", "-sharedDb"]
+    ports:
+      - "8000:8000"
+
+  auth-service:
+    build: ./auth-service
+    image: togglemaster/auth-service:local
+    environment:
+      PORT: "8001"
+      DATABASE_URL: "postgres://postgres:postgres@postgres-auth:5432/auth_db?sslmode=disable"
+      MASTER_KEY: "admin-secreto-123"
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres-auth:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8001/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  flag-service:
+    build: ./flag-service
+    image: togglemaster/flag-service:local
+    environment:
+      PORT: "8002"
+      DATABASE_URL: "postgres://postgres:postgres@postgres-apps:5432/flags_db"
+      AUTH_SERVICE_URL: "http://auth-service:8001"
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres-apps:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  targeting-service:
+    build: ./targeting-service
+    image: togglemaster/targeting-service:local
+    environment:
+      PORT: "8003"
+      DATABASE_URL: "postgres://postgres:postgres@postgres-apps:5432/targeting_db"
+      AUTH_SERVICE_URL: "http://auth-service:8001"
+    ports:
+      - "8003:8003"
+    depends_on:
+      postgres-apps:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8003/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  evaluation-service:
+    build: ./evaluation-service
+    image: togglemaster/evaluation-service:local
+    environment:
+      PORT: "8004"
+      REDIS_URL: "redis://redis:6379"
+      FLAG_SERVICE_URL: "http://flag-service:8002"
+      TARGETING_SERVICE_URL: "http://targeting-service:8003"
+      # chave pre-cadastrada no init do postgres-auth, ver local/postgres-auth/02-dev-key.sql
+      SERVICE_API_KEY: "tm_key_local_dev_123"
+      # sem AWS_SQS_URL o servico loga [SQS_DISABLED] e segue normal. fila so na AWS.
+      AWS_REGION: "us-east-1"
+    ports:
+      - "8004:8004"
+    depends_on:
+      redis:
+        condition: service_healthy
+      flag-service:
+        condition: service_healthy
+      targeting-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8004/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  analytics-service:
+    build: ./analytics-service
+    image: togglemaster/analytics-service:local
+    environment:
+      PORT: "8005"
+      AWS_REGION: "us-east-1"
+      # nao tem SQS local (o enunciado so pede os 4 bancos). apontando pra uma porta morta
+      # o worker falha rapido e fica em retry, o container continua saudavel.
+      AWS_SQS_URL: "http://localhost:9324/000000000000/analytics-events"
+      AWS_DYNAMODB_TABLE: "ToggleMasterAnalytics"
+      AWS_DYNAMODB_ENDPOINT: "http://dynamodb-local:8000"
+      AWS_ACCESS_KEY_ID: "local"
+      AWS_SECRET_ACCESS_KEY: "local"
+    ports:
+      - "8005:8005"
+    depends_on:
+      - dynamodb-local
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8005/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata-auth:
+  pgdata-apps:
