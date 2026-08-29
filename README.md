@@ -29,9 +29,9 @@ serviços perguntam pra ele antes de deixar qualquer requisição passar.
 O paralelo que me ajudou: é um token de API, tipo o token que a gente gera pra integrar
 com a API do Zabbix. Quem tem o token, entra; quem não tem, toma 401.
 
-Uma coisa que eu achei boa no código: ele **nunca guarda a chave**, só o hash SHA-256 dela.
-Se alguém der um SELECT na tabela, vê `a65bbb05a4...` e não consegue fazer nada com isso.
-Quando você cria uma chave, ele te mostra em texto plano uma vez e nunca mais.
+O serviço **nunca guarda a chave**, só o hash SHA-256 dela. Se alguém der um SELECT na
+tabela, vê `a65bbb05a4...` e não consegue fazer nada com isso. A chave em texto plano é
+mostrada uma vez, na criação, e nunca mais.
 
 ```bash
 # criar uma chave (precisa da MASTER_KEY, que e a senha de admin do servico)
@@ -74,9 +74,8 @@ O paralelo: é o anel de piloto de um rollout. Quando a gente vai aplicar patch,
 600 máquinas de uma vez - manda pra 5%, olha se quebrou, e só depois abre pro resto. É
 exatamente isso, só que pra funcionalidade em vez de patch.
 
-A regra fica num campo JSONB do PostgreSQL, e eu achei isso esperto: se amanhã quiserem uma
-regra por lista de usuário ou por país, é só gravar outro JSON, não precisa alterar a
-tabela.
+A regra fica num campo JSONB do PostgreSQL. Se amanhã quiserem uma regra por lista de
+usuário ou por país, basta gravar outro JSON: não precisa alterar a tabela.
 
 ```bash
 # essa flag vale pra 50% dos usuarios
@@ -90,7 +89,7 @@ curl -X POST http://localhost:8003/rules \
 <details>
 <summary><b>evaluation-service</b> (Go, porta 8004) - quem responde sim ou não</summary>
 
-Esse é o que aguenta o tranco. Todos os outros são chamados de vez em quando; esse é
+Esse é o serviço que recebe volume. Os outros quatro são chamados de vez em quando; esse é
 chamado toda vez que alguém abre a tela. Por isso o desafio chama ele de *caminho quente*.
 
 Duas coisas que ele faz pra dar conta:
@@ -171,11 +170,10 @@ flowchart TB
     hpa2{{HPA - CPU 70%}} -.-> ana
 ```
 
-A parte que eu acho mais bonita da arquitetura é a seta pontilhada do evaluation pro SQS.
-Ela é assíncrona: o serviço responde pro cliente e *só depois* manda o evento pra fila,
-numa goroutine. Se o SQS estiver lento ou fora do ar, o usuário nem fica sabendo. Isso é
-o que permite os dois lados escalarem separado - o evaluation escala por tráfego HTTP, o
-analytics escala por tamanho de fila.
+A seta pontilhada do evaluation pro SQS é assíncrona: o serviço responde pro cliente e *só
+depois* manda o evento pra fila, numa goroutine. Se o SQS estiver lento ou fora do ar, o
+usuário não é afetado. É isso que permite os dois lados escalarem separado - o evaluation
+escala por tráfego HTTP, o analytics escala por tamanho de fila.
 
 ## Por que três bancos diferentes
 
@@ -188,8 +186,7 @@ problemas diferentes.
 | **ElastiCache Redis** | cache de leitura com TTL de 30s no caminho quente | é dado descartável. Se o Redis perder tudo, o serviço relê da origem e segue. Guardar isso no RDS seria pagar latência à toa |
 | **DynamoDB** | eventos de analytics: escrita em volume, append-only, sempre buscados por chave | esse volume derrubaria o db.t3.micro do RDS. O DynamoDB escala escrita sem eu gerenciar nó nenhum, e eu nunca preciso de JOIN aqui |
 
-Resumindo do jeito que eu penso: RDS é **verdade**, Redis é **velocidade**, DynamoDB é
-**volume**.
+Resumindo: RDS é **verdade**, Redis é **velocidade**, DynamoDB é **volume**.
 
 ## Rodando na sua máquina
 
