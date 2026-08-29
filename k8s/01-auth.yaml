@@ -1,0 +1,101 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auth-config
+  namespace: auth
+data:
+  PORT: "8001"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: auth-secret
+  namespace: auth
+type: Opaque
+data:
+  # trocar pelo endpoint real do RDS depois de criar. gerar com k8s/gerar-secrets.sh
+  DATABASE_URL: cG9zdGdyZXM6Ly90b2dnbGU6VFJPQ0FSX1NFTkhBQFRST0NBUi1FTkRQT0lOVC1SRFMtQVVUSC51cy1lYXN0LTEucmRzLmFtYXpvbmF3cy5jb206NTQzMi9hdXRoX2RiP3NzbG1vZGU9cmVxdWlyZQ==
+  MASTER_KEY: VFJPQ0FSLU1BU1RFUi1LRVk=
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: auth
+  labels:
+    app: auth-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      containers:
+        - name: auth-service
+          image: TROCAR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/auth-service:v1
+          ports:
+            - containerPort: 8001
+          envFrom:
+            - configMapRef:
+                name: auth-config
+            - secretRef:
+                name: auth-secret
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: auth
+spec:
+  type: ClusterIP
+  selector:
+    app: auth-service
+  ports:
+    - port: 8001
+      targetPort: 8001
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: auth-ingress
+  namespace: auth
+  annotations:
+    # as rotas do auth sao /health, /validate e /admin/keys, entao o prefixo /auth
+    # precisa ser removido antes de chegar na aplicacao
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /auth(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: auth-service
+                port:
+                  number: 8001

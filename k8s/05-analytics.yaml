@@ -1,0 +1,131 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: analytics-config
+  namespace: analytics
+data:
+  PORT: "8005"
+  AWS_REGION: "us-east-1"
+  AWS_DYNAMODB_TABLE: "ToggleMasterAnalytics"
+  # vazio de proposito: rodando na AWS o boto3 resolve o endpoint sozinho.
+  # so o docker-compose local preenche isso, apontando pro dynamodb-local.
+  AWS_DYNAMODB_ENDPOINT: ""
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: analytics-secret
+  namespace: analytics
+type: Opaque
+data:
+  AWS_SQS_URL: aHR0cHM6Ly9zcXMudXMtZWFzdC0xLmFtYXpvbmF3cy5jb20vVFJPQ0FSX0FDQ09VTlRfSUQvdG9nZ2xlbWFzdGVyLWV2ZW50cw==
+  AWS_ACCESS_KEY_ID: VFJPQ0FSX0FDQ0VTU19LRVlfSUQ=
+  AWS_SECRET_ACCESS_KEY: VFJPQ0FSX1NFQ1JFVF9BQ0NFU1NfS0VZ
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-service
+  namespace: analytics
+  labels:
+    app: analytics-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: analytics-service
+  template:
+    metadata:
+      labels:
+        app: analytics-service
+    spec:
+      containers:
+        - name: analytics-service
+          image: TROCAR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/analytics-service:v1
+          ports:
+            - containerPort: 8005
+          envFrom:
+            - configMapRef:
+                name: analytics-config
+            - secretRef:
+                name: analytics-secret
+          resources:
+            requests:
+              # mesmo motivo do evaluation: request baixo pro HPA reagir na demo
+              cpu: 100m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8005
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8005
+            initialDelaySeconds: 20
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: analytics-service
+  namespace: analytics
+spec:
+  type: ClusterIP
+  selector:
+    app: analytics-service
+  ports:
+    - port: 8005
+      targetPort: 8005
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: analytics-ingress
+  namespace: analytics
+  annotations:
+    # o analytics so tem a rota /health, entao o prefixo /analytics tem que sair
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /analytics(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: analytics-service
+                port:
+                  number: 8005
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: analytics-hpa
+  namespace: analytics
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: analytics-service
+  minReplicas: 1
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+    scaleDown:
+      stabilizationWindowSeconds: 60

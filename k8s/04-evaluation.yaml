@@ -1,0 +1,130 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: evaluation-config
+  namespace: evaluation
+data:
+  PORT: "8004"
+  AWS_REGION: "us-east-1"
+  FLAG_SERVICE_URL: "http://flag-service.flags.svc.cluster.local:8002"
+  TARGETING_SERVICE_URL: "http://targeting-service.targeting.svc.cluster.local:8003"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: evaluation-secret
+  namespace: evaluation
+type: Opaque
+data:
+  REDIS_URL: cmVkaXM6Ly9UUk9DQVItRU5EUE9JTlQtRUxBU1RJQ0FDSEUuY2FjaGUuYW1hem9uYXdzLmNvbTo2Mzc5
+  # gerada no dia 2 chamando POST /admin/keys no auth com a MASTER_KEY
+  SERVICE_API_KEY: dG1fa2V5X1RST0NBUl9HRVJBREFfTk9fRElBMg==
+  AWS_SQS_URL: aHR0cHM6Ly9zcXMudXMtZWFzdC0xLmFtYXpvbmF3cy5jb20vVFJPQ0FSX0FDQ09VTlRfSUQvdG9nZ2xlbWFzdGVyLWV2ZW50cw==
+  AWS_ACCESS_KEY_ID: VFJPQ0FSX0FDQ0VTU19LRVlfSUQ=
+  AWS_SECRET_ACCESS_KEY: VFJPQ0FSX1NFQ1JFVF9BQ0NFU1NfS0VZ
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: evaluation-service
+  namespace: evaluation
+  labels:
+    app: evaluation-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: evaluation-service
+  template:
+    metadata:
+      labels:
+        app: evaluation-service
+    spec:
+      containers:
+        - name: evaluation-service
+          image: TROCAR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/evaluation-service:v1
+          ports:
+            - containerPort: 8004
+          envFrom:
+            - configMapRef:
+                name: evaluation-config
+            - secretRef:
+                name: evaluation-secret
+          resources:
+            requests:
+              # request baixo de proposito: o HPA calcula a utilizacao em cima do request,
+              # nao do limit. com request alto a carga da demo nunca chega nos 70%.
+              cpu: 100m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8004
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8004
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: evaluation-service
+  namespace: evaluation
+spec:
+  type: ClusterIP
+  selector:
+    app: evaluation-service
+  ports:
+    - port: 8004
+      targetPort: 8004
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: evaluation-ingress
+  namespace: evaluation
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /evaluate
+            pathType: Prefix
+            backend:
+              service:
+                name: evaluation-service
+                port:
+                  number: 8004
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: evaluation-hpa
+  namespace: evaluation
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: evaluation-service
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      # sobe rapido pra demo nao ficar parada esperando a janela default de estabilizacao
+      stabilizationWindowSeconds: 0
+    scaleDown:
+      stabilizationWindowSeconds: 60
