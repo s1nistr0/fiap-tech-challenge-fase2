@@ -14,30 +14,132 @@ Este README é a versão escrita do que eu explico no vídeo.
 produto sem precisar fazer deploy. Você marca uma feature como "ligada pra 50% dos
 usuários", e o sistema responde true ou false pra cada usuário que perguntar.
 
-## Os 5 serviços e o que cada um faz
+## Os 5 serviços
 
-**auth-service** (Go) - o porteiro. Ele guarda chaves de API e responde uma pergunta só:
-"essa chave é válida?". Nunca guarda a chave em texto plano, só o hash SHA-256 dela. Os
-outros serviços perguntam pra ele antes de deixar qualquer requisição passar.
+Eu venho de infraestrutura, não de desenvolvimento. Então pra entender o que cada serviço
+faz, fui procurando paralelo com coisa que eu já mexo no dia a dia. Deixo aqui do jeito que
+fez sentido pra mim, com um exemplo prático de cada um.
 
-**flag-service** (Python) - o cadastro. É o CRUD das flags: nome, descrição e o interruptor
-geral (`is_enabled`). Se a flag está desligada aqui, está desligada pra todo mundo, não
-importa mais nada.
+<details open>
+<summary><b>auth-service</b> (Go, porta 8001) - quem valida a chave</summary>
 
-**targeting-service** (Python) - as regras de quem recebe o quê. Guarda coisas do tipo
-"essa flag vale pra 50% dos usuários". A regra fica num campo JSONB do PostgreSQL, o que
-me deixa mudar o formato da regra depois sem migração de schema.
+Ele guarda chaves de API e responde uma pergunta só: "essa chave é válida?". Os outros
+serviços perguntam pra ele antes de deixar qualquer requisição passar.
 
-**evaluation-service** (Go) - o que responde de verdade. É o *caminho quente*: recebe
-`user_id` + `flag_name` e devolve true ou false. Pra não bater no banco a cada chamada, ele
-junta os dados do flag-service e do targeting-service uma vez e guarda no Redis por 30
-segundos. A decisão em si é determinística: ele faz um hash do `user_id + flag_name`, tira
-o módulo 100 e compara com a porcentagem. Ou seja, o mesmo usuário sempre recebe a mesma
-resposta - o que importa, porque ninguém quer ver um botão aparecer e sumir a cada refresh.
+O paralelo que me ajudou: é um token de API, tipo o token que a gente gera pra integrar
+com a API do Zabbix. Quem tem o token, entra; quem não tem, toma 401.
 
-**analytics-service** (Python) - o histórico. Não fica no caminho da requisição: ele
-consome eventos de uma fila SQS e grava no DynamoDB. Se ele cair, ninguém percebe na hora,
-as mensagens ficam esperando na fila.
+Uma coisa que eu achei boa no código: ele **nunca guarda a chave**, só o hash SHA-256 dela.
+Se alguém der um SELECT na tabela, vê `a65bbb05a4...` e não consegue fazer nada com isso.
+Quando você cria uma chave, ele te mostra em texto plano uma vez e nunca mais.
+
+```bash
+# criar uma chave (precisa da MASTER_KEY, que e a senha de admin do servico)
+curl -X POST http://localhost:8001/admin/keys \
+  -H "Authorization: Bearer admin-secreto-123" \
+  -H 'Content-Type: application/json' -d '{"name":"minha-app"}'
+```
+```json
+{"name":"minha-app","key":"tm_key_9f3a...","message":"Guarde esta chave com seguranca!..."}
+```
+
+</details>
+
+<details>
+<summary><b>flag-service</b> (Python, porta 8002) - o cadastro das flags</summary>
+
+É o CRUD: criar, listar, editar e apagar flag. Cada flag tem nome, descrição e um
+`is_enabled`, que é o interruptor geral. Se estiver desligado aqui, está desligado pra todo
+mundo, não importa mais nenhuma regra.
+
+O paralelo: é o *kill switch*. Igual quando a gente desabilita uma tarefa agendada ou para
+um serviço no Windows - não interessa a configuração dele, parou pra geral.
+
+```bash
+# cadastrar a flag do novo dashboard, ja ligada
+curl -X POST http://localhost:8002/flags \
+  -H "Authorization: Bearer tm_key_local_dev_123" -H 'Content-Type: application/json' \
+  -d '{"name":"enable-new-dashboard","description":"dashboard novo","is_enabled":true}'
+```
+
+</details>
+
+<details>
+<summary><b>targeting-service</b> (Python, porta 8003) - pra quem a flag vale</summary>
+
+A flag estar ligada não quer dizer que todo mundo recebe. Aqui é onde fica a regra de
+*quem* recebe. Hoje o código só entende um tipo: porcentagem.
+
+O paralelo: é o anel de piloto de um rollout. Quando a gente vai aplicar patch, não joga em
+600 máquinas de uma vez - manda pra 5%, olha se quebrou, e só depois abre pro resto. É
+exatamente isso, só que pra funcionalidade em vez de patch.
+
+A regra fica num campo JSONB do PostgreSQL, e eu achei isso esperto: se amanhã quiserem uma
+regra por lista de usuário ou por país, é só gravar outro JSON, não precisa alterar a
+tabela.
+
+```bash
+# essa flag vale pra 50% dos usuarios
+curl -X POST http://localhost:8003/rules \
+  -H "Authorization: Bearer tm_key_local_dev_123" -H 'Content-Type: application/json' \
+  -d '{"flag_name":"enable-new-dashboard","rules":{"type":"PERCENTAGE","value":50}}'
+```
+
+</details>
+
+<details>
+<summary><b>evaluation-service</b> (Go, porta 8004) - quem responde sim ou não</summary>
+
+Esse é o que aguenta o tranco. Todos os outros são chamados de vez em quando; esse é
+chamado toda vez que alguém abre a tela. Por isso o desafio chama ele de *caminho quente*.
+
+Duas coisas que ele faz pra dar conta:
+
+**Cache no Redis.** Em vez de perguntar pro flag-service e pro targeting-service a cada
+chamada, ele pergunta uma vez, junta as duas respostas e guarda no Redis por 30 segundos. O
+paralelo é o TTL de DNS: você não consulta o servidor DNS a cada pacote, resolve uma vez e
+guarda um tempo.
+
+**Resposta determinística.** Ele pega `user_id + flag_name`, calcula um hash, tira o módulo
+100 e compara com a porcentagem. O mesmo usuário sempre cai no mesmo número. Isso importa
+mais do que parece: se fosse sorteio aleatório, o usuário veria o botão aparecer e sumir a
+cada F5.
+
+```bash
+curl "http://localhost:8004/evaluate?user_id=user-1&flag_name=enable-new-dashboard"
+# {"flag_name":"enable-new-dashboard","user_id":"user-1","result":true}
+
+curl "http://localhost:8004/evaluate?user_id=user-abc&flag_name=enable-new-dashboard"
+# {"flag_name":"enable-new-dashboard","user_id":"user-abc","result":false}
+```
+
+Rode o mesmo `user-1` dez vezes: dá `true` nas dez.
+
+</details>
+
+<details>
+<summary><b>analytics-service</b> (Python, porta 8005) - o histórico, fora do caminho</summary>
+
+Toda vez que o evaluation responde alguma coisa, ele joga um evento numa fila. Esse serviço
+fica lendo a fila e gravando no DynamoDB, pra depois alguém conseguir responder "quantos
+usuários viram o dashboard novo essa semana".
+
+O detalhe importante é que ele **não fica no caminho da requisição**. O paralelo mais
+próximo do meu dia a dia é a coleta do Zabbix: o agente coleta e manda pro servidor, e se o
+servidor Zabbix cair, a aplicação monitorada continua funcionando normalmente. Aqui é
+igual - se esse serviço morrer, ninguém que está usando o produto percebe. As mensagens
+ficam esperando na fila e ele processa quando voltar.
+
+Ele nem tem endpoint de negócio, só o `/health`:
+
+```bash
+curl http://localhost:8005/health
+# {"status":"ok"}
+```
+
+O trabalho de verdade acontece numa thread em segundo plano, com long polling na fila.
+
+</details>
 
 ## Como eles conversam
 

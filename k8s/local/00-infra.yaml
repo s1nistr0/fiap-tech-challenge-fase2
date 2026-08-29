@@ -1,0 +1,263 @@
+# Bancos rodando DENTRO do cluster, so pro ensaio local.
+# Na AWS isso nao existe: la sao RDS, ElastiCache e DynamoDB gerenciados.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: infra-local
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pg-auth-init
+  namespace: infra-local
+data:
+  01-schema.sql: |
+    CREATE TABLE IF NOT EXISTS api_keys (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        key_hash VARCHAR(64) NOT NULL UNIQUE,
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+  02-dev-key.sql: |
+    -- mesma chave do docker-compose: tm_key_local_dev_123
+    INSERT INTO api_keys (name, key_hash)
+    VALUES ('dev-local', 'a65bbb05a442b87ec792e357050d28720319cb246be1a8445feeb092feb860c0')
+    ON CONFLICT (key_hash) DO NOTHING;
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pg-apps-init
+  namespace: infra-local
+data:
+  01-init.sh: |
+    #!/bin/bash
+    set -e
+    psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres <<-EOSQL
+        CREATE DATABASE flags_db;
+        CREATE DATABASE targeting_db;
+    EOSQL
+    psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d flags_db <<-'EOSQL'
+        CREATE TABLE IF NOT EXISTS flags (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(100) UNIQUE NOT NULL,
+            description TEXT,
+            is_enabled BOOLEAN NOT NULL DEFAULT false,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+    EOSQL
+    psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d targeting_db <<-'EOSQL'
+        CREATE TABLE IF NOT EXISTS targeting_rules (
+            id SERIAL PRIMARY KEY,
+            flag_name VARCHAR(100) UNIQUE NOT NULL,
+            is_enabled BOOLEAN NOT NULL DEFAULT true,
+            rules JSONB NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+    EOSQL
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-auth
+  namespace: infra-local
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-auth
+  template:
+    metadata:
+      labels:
+        app: postgres-auth
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              value: postgres
+            - name: POSTGRES_DB
+              value: auth_db
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "auth_db"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: init
+          configMap:
+            name: pg-auth-init
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-auth
+  namespace: infra-local
+spec:
+  selector:
+    app: postgres-auth
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-apps
+  namespace: infra-local
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-apps
+  template:
+    metadata:
+      labels:
+        app: postgres-apps
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              value: postgres
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U postgres && psql -U postgres -d targeting_db -c 'select 1'"]
+            initialDelaySeconds: 8
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: init
+          configMap:
+            name: pg-apps-init
+            defaultMode: 0755
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-apps
+  namespace: infra-local
+spec:
+  selector:
+    app: postgres-apps
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: infra-local
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: infra-local
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dynamodb-local
+  namespace: infra-local
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dynamodb-local
+  template:
+    metadata:
+      labels:
+        app: dynamodb-local
+    spec:
+      containers:
+        - name: dynamodb
+          image: amazon/dynamodb-local:latest
+          args: ["-jar", "DynamoDBLocal.jar", "-inMemory", "-sharedDb"]
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dynamodb-local
+  namespace: infra-local
+spec:
+  selector:
+    app: dynamodb-local
+  ports:
+    - port: 8000
+      targetPort: 8000
