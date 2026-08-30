@@ -50,6 +50,27 @@ done
 echo "=== 6. cluster EKS (leva ~15min, apaga VPC, subnets, NAT e nodes) ==="
 eksctl delete cluster --name $CLUSTER --region $REGION --disable-nodegroup-eviction 2>&1 | tail -5
 
+echo "=== 6b. limpando o que o eksctl deixa pra tras ==="
+# o eks-cluster-sg-* e criado e gerenciado pela AWS, nao pelo eksctl, entao nao faz parte
+# da pilha. Ele fica orfao segurando a VPC, que segura a pilha em DELETE_FAILED.
+# Aconteceu na primeira vez e travou tudo ate eu apagar na mao.
+SG=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=eks-cluster-sg-*" \
+      --query 'SecurityGroups[0].GroupId' --output text --region $REGION 2>/dev/null)
+if [ -n "$SG" ] && [ "$SG" != "None" ]; then
+  aws ec2 delete-security-group --group-id "$SG" --region $REGION >/dev/null 2>&1 \
+    && echo "  security group orfao removido: $SG"
+fi
+VPC=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=eksctl-$CLUSTER-cluster/VPC" \
+       --query 'Vpcs[0].VpcId' --output text --region $REGION 2>/dev/null)
+if [ -n "$VPC" ] && [ "$VPC" != "None" ]; then
+  for sg in $(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC" \
+        --query 'SecurityGroups[?GroupName!=`default`].GroupId' --output text --region $REGION 2>/dev/null); do
+    aws ec2 delete-security-group --group-id "$sg" --region $REGION >/dev/null 2>&1
+  done
+  aws ec2 delete-vpc --vpc-id "$VPC" --region $REGION >/dev/null 2>&1 && echo "  VPC removida: $VPC"
+  aws cloudformation delete-stack --stack-name "eksctl-$CLUSTER-cluster" --region $REGION >/dev/null 2>&1
+fi
+
 echo "=== 7. DynamoDB e SQS ==="
 aws dynamodb delete-table --table-name ToggleMasterAnalytics --region $REGION >/dev/null 2>&1 \
   && echo "  tabela apagada" || echo "  tabela ja nao existe"
