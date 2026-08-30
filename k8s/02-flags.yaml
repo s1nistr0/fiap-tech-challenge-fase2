@@ -37,7 +37,7 @@ spec:
       terminationGracePeriodSeconds: 45
       containers:
         - name: flag-service
-          image: TROCAR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/flag-service:v1
+          image: 541754963625.dkr.ecr.us-east-1.amazonaws.com/flag-service:v1
           ports:
             - containerPort: 8002
           envFrom:

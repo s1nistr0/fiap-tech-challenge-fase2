@@ -24,7 +24,11 @@ Os manifestos estão commitados com placeholder. Procure por `TROCAR`:
 
 ## Ordem de aplicação
 
-A ordem importa porque o Deployment falha se o Secret que ele referencia ainda não existe.
+**Os manifestos vêm primeiro, os Secrets reais depois.** Cada arquivo de serviço contém um
+Secret com placeholder, então aplicar o manifesto por cima de um Secret já preenchido
+sobrescreve ele de volta pro placeholder. O pod sobe, tenta conectar em
+`TROCAR-ENDPOINT-RDS-AUTH` e entra em CrashLoopBackOff. Perdi tempo com isso, aplicando na
+ordem errada.
 
 ```bash
 # 1. namespaces primeiro, senao nada tem onde nascer
