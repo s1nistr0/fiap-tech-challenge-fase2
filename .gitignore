@@ -3,11 +3,11 @@
 !.env.example
 .DS_Store
 
-# anotacoes minhas de estudo/roteiro, nao faz parte da entrega
+# minhas anotacoes de estudo e roteiros, nao fazem parte da entrega
+_notas/
 CLAUDE.md
-ANOTACOES-AULAS.md
-DESAFIOS-ENCONTRADOS.md
 .claude/
+.vscode/
 
 # binarios do go build local
 auth-service/auth-service
@@ -16,21 +16,3 @@ evaluation-service/evaluation-service
 __pycache__/
 *.pyc
 venv/
-
-# roteiro do dia 2, so meu
-DIA2-RUNBOOK.md
-
-# glossario de estudo, so meu
-GLOSSARIO.md
-
-# notas da sessao de defesa, so minhas
-CONCEITOS-DEFESA.md
-
-# roteiro do video, so meu
-ROTEIRO-VIDEO.md
-
-# cola da gravacao, so minha
-COLA-GRAVACAO.md
-
-# checklist do video, so meu
-CHECKLIST-VIDEO.md
