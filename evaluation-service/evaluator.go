@@ -8,7 +8,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"os"
+	"os" // esse import aqui nao existia mas o codigo precisava dele pra rodar...
 	"sync"
 	"time"
 )

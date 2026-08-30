@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	// import so pelo side effect: registra o driver "pgx" no database/sql
+	// import somente por necessidade. Coloquei essa lib de banco de dados e tive que fuçar muito pro go compilar kkkkk
 	_ "github.com/jackc/pgx/v4/stdlib"
 	"github.com/joho/godotenv"
 )
@@ -22,7 +22,7 @@ type App struct {
 }
 
 func main() {
-	// Carrega o .env para desenvolvimento local. Em produção, isso não fará nada.
+	// Carrega o .env para desenvolvimento local
 	_ = godotenv.Load()
 
 	// --- Configuração ---
